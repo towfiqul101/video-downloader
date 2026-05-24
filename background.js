@@ -1,10 +1,10 @@
-// background.js
+// Background script - intercepts network requests and manages video registry
 
-// Import the HLS parser library you created
+// Import the HLS parser library
 importScripts('lib/hls-parser.js');
 
-const videoRegistry = new Map();
-const downloadProgress = new Map();
+const videoRegistry = new Map(); // tabId -> array of video objects
+const downloadProgress = new Map(); // downloadId -> progress info
 
 // Intercept network requests to catch video streams
 chrome.webRequest.onBeforeRequest.addListener(
@@ -14,17 +14,20 @@ chrome.webRequest.onBeforeRequest.addListener(
     
     if (tabId === -1) return;
     
+    // Detect video/stream URLs
     const videoPatterns = [
       /\.(mp4|webm|ogg|mkv|avi|mov)(\?|$)/i,
-      /\.m3u8(\?|$)/i,
-      /\.mpd(\?|$)/i,
-      /videoplayback\?/i,
-      /manifest\./i,
+      /\.m3u8(\?|$)/i,           // HLS manifest
+      /\.mpd(\?|$)/i,            // DASH manifest
+      /videoplayback\?/i,        // YouTube-style
+      /manifest\./i,             // Generic manifest
       /playlist\.m3u8/i,
       /master\.m3u8/i
     ];
     
-    if (videoPatterns.some(pattern => pattern.test(url))) {
+    const isVideo = videoPatterns.some(pattern => pattern.test(url));
+    
+    if (isVideo) {
       const videoType = url.match(/\.m3u8/i) ? 'hls' :
                        url.match(/\.mpd/i) ? 'dash' : 'direct';
       
@@ -39,12 +42,24 @@ chrome.webRequest.onBeforeRequest.addListener(
         domain: new URL(url).hostname
       };
       
-      if (!videoRegistry.has(tabId)) videoRegistry.set(tabId, []);
+      // Store per tab
+      if (!videoRegistry.has(tabId)) {
+        videoRegistry.set(tabId, []);
+      }
       
       const videos = videoRegistry.get(tabId);
+      // Avoid duplicates
       if (!videos.some(v => v.url === url)) {
         videos.push(videoInfo);
-        chrome.runtime.sendMessage({ action: 'videoDetected', tabId: tabId, video: videoInfo }).catch(() => {});
+        
+        // Notify popup if open
+        chrome.runtime.sendMessage({
+          action: 'videoDetected',
+          tabId: tabId,
+          video: videoInfo
+        }).catch(() => {});
+        
+        // Update badge
         updateBadge(tabId);
       }
     }
@@ -53,30 +68,41 @@ chrome.webRequest.onBeforeRequest.addListener(
   []
 );
 
+// Listen for messages from content script and popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.action) {
     case 'registerVideo':
       handleContentVideo(message.video, sender.tab?.id);
       sendResponse({ success: true });
       break;
+      
     case 'getVideos':
-      sendResponse({ videos: videoRegistry.get(message.tabId || sender.tab?.id) || [] });
+      const tabId = message.tabId || sender.tab?.id;
+      sendResponse({ videos: videoRegistry.get(tabId) || [] });
       break;
+      
     case 'downloadVideo':
       downloadVideo(message.videoId, message.tabId, message.quality);
       sendResponse({ success: true });
       break;
+      
     case 'clearVideos':
       videoRegistry.delete(message.tabId);
       updateBadge(message.tabId);
       sendResponse({ success: true });
       break;
+      
+    case 'getProgress':
+      sendResponse({ progress: downloadProgress.get(message.downloadId) });
+      break;
   }
   return true;
 });
 
+// Handle videos found by content script
 function handleContentVideo(video, tabId) {
   if (!tabId) return;
+  
   const videoInfo = {
     id: generateId(),
     url: video.url,
@@ -89,7 +115,9 @@ function handleContentVideo(video, tabId) {
     pageUrl: video.pageUrl
   };
   
-  if (!videoRegistry.has(tabId)) videoRegistry.set(tabId, []);
+  if (!videoRegistry.has(tabId)) {
+    videoRegistry.set(tabId, []);
+  }
   
   const videos = videoRegistry.get(tabId);
   if (!videos.some(v => v.url === video.url)) {
@@ -98,6 +126,7 @@ function handleContentVideo(video, tabId) {
   }
 }
 
+// Download a video
 async function downloadVideo(videoId, tabId, preferredQuality) {
   const videos = videoRegistry.get(tabId) || [];
   const video = videos.find(v => v.id === videoId);
@@ -107,9 +136,10 @@ async function downloadVideo(videoId, tabId, preferredQuality) {
   const filename = sanitizeFilename(video.title || `video_${Date.now()}`);
   
   if (video.type === 'hls') {
-    // Pass to our new proper HLS merger
+    // Process HLS manifest and merge segments
     await processHLSDownload(video.url, filename);
   } else {
+    // Direct download
     chrome.downloads.download({
       url: video.url,
       filename: `VideoDownloads/${filename}${getExtension(video.url)}`,
@@ -118,10 +148,9 @@ async function downloadVideo(videoId, tabId, preferredQuality) {
   }
 }
 
-// Fixed HLS Processor: Merges segments into a single playable file
+// Process HLS stream: Download and merge chunks
 async function processHLSDownload(m3u8Url, filename) {
   try {
-    // Use the class from lib/hls-parser.js
     const parser = new HLSParser(); 
     const result = await parser.getAllSegmentUrls(m3u8Url);
     const segments = result.segments;
@@ -131,7 +160,6 @@ async function processHLSDownload(m3u8Url, filename) {
       return;
     }
 
-    // Optional: Notify user that merging has started (takes time)
     console.log(`Starting download and merge of ${segments.length} segments...`);
 
     const buffers = [];
@@ -145,13 +173,13 @@ async function processHLSDownload(m3u8Url, filename) {
       }
     }
 
-    // Merge all TS binary chunks into one Blob
+    // Merge chunks into one Blob
     const mergedBlob = new Blob(buffers, { type: 'video/mp2t' });
     const blobUrl = URL.createObjectURL(mergedBlob);
     
     chrome.downloads.download({
       url: blobUrl,
-      filename: `VideoDownloads/${filename}.ts`, // Save as standard MPEG-TS
+      filename: `VideoDownloads/${filename}.ts`,
       saveAs: false
     });
 
@@ -160,29 +188,60 @@ async function processHLSDownload(m3u8Url, filename) {
   }
 }
 
+// Update extension badge with video count
 function updateBadge(tabId) {
-  const count = (videoRegistry.get(tabId) || []).length;
-  chrome.action.setBadgeText({ text: count > 0 ? String(count) : '', tabId: tabId });
-  chrome.action.setBadgeBackgroundColor({ color: '#FF6B35' });
+  const videos = videoRegistry.get(tabId) || [];
+  const count = videos.length;
+  
+  chrome.action.setBadgeText({
+    text: count > 0 ? String(count) : '',
+    tabId: tabId
+  });
+  
+  chrome.action.setBadgeBackgroundColor({
+    color: '#FF6B35'
+  });
 }
 
-chrome.tabs.onRemoved.addListener(tabId => videoRegistry.delete(tabId));
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+// Clean up when tab closes
+chrome.tabs.onRemoved.addListener((tabId) => {
+  videoRegistry.delete(tabId);
+});
+
+// Handle tab updates - clear old videos when navigating
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'loading') {
     videoRegistry.delete(tabId);
     updateBadge(tabId);
   }
 });
 
-function generateId() { return Math.random().toString(36).substring(2, 15); }
-function extractQuality(url) {
-  const match = url.match(/(\d{3,4})p/i) || url.match(/(\d{3,4})x(\d{3,4})/);
-  return match ? match[1] + 'p' : 'unknown';
+// Utility functions
+function generateId() {
+  return Math.random().toString(36).substring(2, 15);
 }
+
+function extractQuality(url) {
+  const qualityPatterns = [
+    /(\d{3,4})p/i,
+    /(\d{3,4})x(\d{3,4})/,
+    /quality[=/](\w+)/i,
+    /res[=/](\d+)/i
+  ];
+  
+  for (const pattern of qualityPatterns) {
+    const match = url.match(pattern);
+    if (match) return match[1] + 'p';
+  }
+  
+  return 'unknown';
+}
+
 function getExtension(url) {
   const match = url.match(/\.([a-zA-Z0-9]+)(?:\?|$)/);
   return match ? `.${match[1]}` : '.mp4';
 }
+
 function sanitizeFilename(name) {
   return name.replace(/[<>:\"/\\|?*]+/g, '_').substring(0, 100);
 }
