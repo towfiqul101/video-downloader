@@ -1,0 +1,16 @@
+{
+  "name": "video-downloadhelper",
+  "version": "1.0.0",
+  "description": "Browser extension to detect and download videos",
+  "scripts": {
+    "lint": "npx eslint .",
+    "format": "npx prettier --write .",
+    "pack": "zip -r video-downloadhelper.zip . -x '*.git*' -x 'node_modules/*' -x '*.zip'"
+  },
+  "keywords": ["browser-extension", "video-downloader", "chrome-extension"],
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "prettier": "^3.0.0"
+  }
+}
