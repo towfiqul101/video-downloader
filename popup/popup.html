@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <h1>🎬 Video Downloader</h1>
+    <span class="badge" id="count-badge">0</span>
+  </div>
+  
+  <div class="toolbar">
+    <button id="refresh-btn" class="btn-icon" title="Rescan page">🔄</button>
+    <button id="clear-btn" class="btn-icon" title="Clear all">🗑️</button>
+    <button id="settings-btn" class="btn-icon" title="Settings">⚙️</button>
+  </div>
+  
+  <div id="video-list" class="video-list">
+    <div class="empty-state">
+      <div class="empty-icon">🔍</div>
+      <p>No videos detected yet</p>
+      <p class="sub">Play a video or refresh the page</p>
+    </div>
+  </div>
+  
+  <div class="footer">
+    <label class="checkbox">
+      <input type="checkbox" id="auto-detect" checked>
+      <span>Auto-detect on page load</span>
+    </label>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
