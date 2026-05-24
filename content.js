@@ -9,6 +9,7 @@
   scanForVideos();
   
   // Watch for dynamically added videos
+  let scanTimeout;
   const observer = new MutationObserver((mutations) => {
     let shouldScan = false;
     for (const mutation of mutations) {
@@ -17,8 +18,11 @@
         break;
       }
     }
+    
+    // Debounce the scan to prevent freezing the browser on dynamic sites
     if (shouldScan) {
-      setTimeout(scanForVideos, 500);
+      clearTimeout(scanTimeout);
+      scanTimeout = setTimeout(scanForVideos, 1000); // Wait 1 second after DOM stops changing
     }
   });
   
@@ -119,14 +123,14 @@
     const strategies = [
       () => document.querySelector('h1')?.textContent,
       () => document.title,
-      () => element.getAttribute('data-title'),
-      () => element.getAttribute('aria-label'),
+      () => element?.getAttribute('data-title'),
+      () => element?.getAttribute('aria-label'),
       () => {
-        const container = element.closest('[class*="title"], [id*="title"]');
+        const container = element?.closest('[class*="title"], [id*="title"]');
         return container?.textContent;
       },
       () => {
-        const figcaption = element.closest('figure')?.querySelector('figcaption');
+        const figcaption = element?.closest('figure')?.querySelector('figcaption');
         return figcaption?.textContent;
       }
     ];
